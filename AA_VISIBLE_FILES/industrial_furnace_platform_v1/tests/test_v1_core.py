@@ -465,8 +465,8 @@ def test_zhipu_triz_challenge_uses_review_timeout_without_retries():
     )
     provider = {"name": "智谱清言"}
 
-    assert ai_client_module._provider_request_timeout(provider, prompt) == 18
-    assert ai_client_module._provider_max_retries(provider, prompt) == 0
+    assert ai_client_module._provider_request_timeout(provider, prompt) == 45
+    assert ai_client_module._provider_max_retries(provider, prompt) == 1
 
 
 def test_knowledge_lookup_returns_local_answer_when_doubao_triz_call_is_missing(tmp_path, monkeypatch):
