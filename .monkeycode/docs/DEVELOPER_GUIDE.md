@@ -22,4 +22,4 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 python3 -m pytest
 ```
 
-AI 查询改动至少应覆盖 DeepSeek TRIZ 方案成功、DeepSeek 失败、智谱清言质询成功和智谱清言质询失败四类路径。
+AI 查询改动至少应覆盖 DeepSeek TRIZ 方案成功、DeepSeek 失败、豆包与智谱清言并行质询成功、任一质询失败四类路径。

@@ -9,4 +9,4 @@
 
 ## 当前 AI 流程
 
-`AI 查询 -> 火山 TRIZ -> DeepSeek 质询 -> 智谱总结` 依次执行资料库检索、火山 TRIZ 方案生成、DeepSeek 质询和智谱清言总结。
+`AI 查询 -> DeepSeek TRIZ -> 豆包与智谱清言并行质询` 依次执行资料库检索、DeepSeek TRIZ 方案生成，以及双模型独立质询。
