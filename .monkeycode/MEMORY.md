@@ -63,3 +63,25 @@ AI 查询逐文档检索偏好
   - 处理项目资料问答时，优先按文档逐篇顺序检索，再汇总回答。
   - 出炉温度、入炉温度、炉底机械传动等参数题优先逐份技术性能表查找。
   - 冷却水管路设计、操作维护、注意事项类问题优先逐份 Word 正文或技术说明查找。
+
+根目录 Web 服务启动方式
+- Date: 2026-07-20
+- Context: Agent 在启动当前仓库根目录工业炉计算平台时发现
+- Category: 环境配置
+- Instructions:
+  - FastAPI 服务入口为 `app.main:app`，启动命令为 `python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000`。
+  - README 中引用的 `app_server.py` 已不在当前工作区。
+
+V1 资料管理工程运行依赖
+- Date: 2026-07-20
+- Context: Agent 在启动 V1 Python 工程时发现
+- Category: 环境配置
+- Instructions:
+  - V1 运行目录为 `AA_VISIBLE_FILES/industrial_furnace_platform_v1`，服务启动命令为 `python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000`。
+  - 除 requirements.txt 外，AI 适配模块还依赖 `tencentcloud-sdk-python`。
+
+变更范围控制偏好
+- Date: 2026-07-25
+- Context: 用户要求继续开发计算平台时提出
+- Instructions:
+  - 修改前先确认本轮功能范围，避免对密码、二进制文件和服务器配置进行未授权操作。
