@@ -9,10 +9,23 @@
 响应的 `result.responses` 按工作流保留各阶段内容：
 
 - `workflow_role: knowledge_base_answer`：资料库检索初判。
-- `workflow_role: triz_analyst`：DeepSeek TRIZ 方案。
-- `workflow_role: triz_challenger`：智谱清言方案质询。
+- `workflow_role: doubao_triz_analyst`：豆包 TRIZ 方案。
+- `workflow_role: deepseek_challenger`：DeepSeek 方案质询。
+- `workflow_role: zhipu_challenger`：智谱清言方案质询。
 
-响应的 `fallback_reason` 标记工作流状态。DeepSeek 失败时返回资料初判；智谱清言缺失或失败时返回 DeepSeek TRIZ 方案。
+响应的 `fallback_reason` 标记工作流状态。豆包失败时返回资料初判；任一并行质询失败时保留豆包 TRIZ 方案。响应中的 `rounds` 保存当前会话的版本列表。
+
+`POST /api/projects/{project_id}/ai-analyses/{analysis_id}/rounds`
+
+请求体包含必填字段 `human_feedback`。系统将前一轮模型方案、质询结论和人工意见作为上下文，创建第 2 至第 5 轮评审记录。
+
+`GET /api/projects/{project_id}/ai-analyses/{analysis_id}/download-docx`
+
+返回第 1 轮 Word `.docx` 文件，内容包含分析问题和所有已返回的工作流结果。
+
+`GET /api/projects/{project_id}/ai-analyses/{analysis_id}/rounds/{round_no}/download-docx`
+
+返回指定轮次的版本化 Word `.docx` 文件，包含轮次、模型结论和该轮吸收的人工意见。
 
 ## 静态页面
 

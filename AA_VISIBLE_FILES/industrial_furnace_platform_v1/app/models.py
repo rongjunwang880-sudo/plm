@@ -88,6 +88,19 @@ class AiAnalysis(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
+class AiAnalysisRound(Base, TimestampMixin):
+    __tablename__ = "ai_analysis_rounds"
+    __table_args__ = (UniqueConstraint("analysis_id", "round_no", name="uq_ai_analysis_round_number"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(ForeignKey("ai_analyses.id"), nullable=False, index=True)
+    round_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    human_feedback: Mapped[str | None] = mapped_column(Text)
+    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 class CalcStepTemplate(Base, TimestampMixin):
     __tablename__ = "calc_step_templates"
 

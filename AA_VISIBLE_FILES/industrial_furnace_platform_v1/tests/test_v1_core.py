@@ -180,9 +180,9 @@ def test_index_page_loads_console():
         "结果图表区",
             "内置 TRIZ 分析工具",
             "ai-progress",
-            "正在进行 TRIZ 分析",
-            "deepseek_triz_analyst",
-            "doubao_challenger",
+            "正在进行第 1 轮 TRIZ 分析",
+            "doubao_triz_analyst",
+            "deepseek_challenger",
             "zhipu_challenger",
         "错误码：",
         "错误信息：",
@@ -191,6 +191,82 @@ def test_index_page_loads_console():
     ]
     for marker in ai_multi_model_markers:
         assert marker in text
+
+
+def test_download_ai_analysis_docx_contains_question_and_model_responses():
+    init_db()
+    client.post("/api/seed")
+    project = client.get("/api/projects").json()[0]
+    db = SessionLocal()
+    analysis = models.AiAnalysis(
+        project_id=project["id"],
+        project_item_id=None,
+        equipment_name="AI 查询",
+        analysis_type="knowledge_lookup",
+        request_json=json.dumps({"original_question": "冷却水管路有哪些维护风险？"}, ensure_ascii=False),
+        response_json=json.dumps(
+            {
+                "responses": [
+                    {"workflow_role": "deepseek_triz_analyst", "answer": "DeepSeek TRIZ 方案"},
+                    {"workflow_role": "doubao_challenger", "answer": "豆包质询结论"},
+                    {"workflow_role": "zhipu_challenger", "answer": "智谱清言质询结论"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        provider="DeepSeek",
+        status="SUCCESS",
+    )
+    db.add(analysis)
+    db.commit()
+    db.refresh(analysis)
+    db.close()
+
+    response = client.get(f"/api/projects/{project['id']}/ai-analyses/{analysis.id}/download-docx", headers={"X-Role": "engineer"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    assert "ai-triz-analysis" in response.headers["content-disposition"]
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "冷却水管路有哪些维护风险？" in document
+    assert "DeepSeek TRIZ 方案" in document
+    assert "豆包质询结论" in document
+    assert "智谱清言质询结论" in document
+
+
+def test_ai_analysis_next_round_persists_feedback_and_exports_versioned_docx():
+    init_db()
+    client.post("/api/seed")
+    project = client.get("/api/projects").json()[0]
+    db = SessionLocal()
+    analysis = models.AiAnalysis(
+        project_id=project["id"], project_item_id=None, equipment_name="AI 查询", analysis_type="knowledge_lookup",
+        request_json=json.dumps({"original_question": "冷却水管路有哪些维护风险？", "analysis_type": "knowledge_lookup"}, ensure_ascii=False),
+        response_json=json.dumps({"answer": "首轮方案", "responses": []}, ensure_ascii=False), provider="豆包", status="SUCCESS",
+    )
+    db.add(analysis)
+    db.flush()
+    db.add(models.AiAnalysisRound(analysis_id=analysis.id, round_no=1, human_feedback=None, response_json=analysis.response_json, provider="豆包", status="SUCCESS"))
+    db.commit()
+    analysis_id = analysis.id
+    db.close()
+
+    response = client.post(
+        f"/api/projects/{project['id']}/ai-analyses/{analysis_id}/rounds",
+        headers={"X-Role": "engineer"},
+        json={"human_feedback": "补充冷却水流量实测并收敛风险项。"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["round"]["round_no"] == 2
+    assert response.json()["round"]["human_feedback"] == "补充冷却水流量实测并收敛风险项。"
+    docx = client.get(f"/api/projects/{project['id']}/ai-analyses/{analysis_id}/rounds/2/download-docx", headers={"X-Role": "engineer"})
+    assert docx.status_code == 200
+    with zipfile.ZipFile(BytesIO(docx.content)) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "第 2 轮 / 版本 V2.0" in document
+    assert "补充冷却水流量实测并收敛风险项。" in document
 
 
 def test_run_joint_analysis_returns_local_response_array_when_no_provider(tmp_path, monkeypatch):
@@ -287,7 +363,7 @@ def test_run_joint_analysis_runs_volc_then_deepseek_review(tmp_path, monkeypatch
     assert result["fallback_reason"] == "search_1_review_1_success"
 
 
-def test_run_joint_analysis_uses_deepseek_triz_and_parallel_challenges_for_knowledge_lookup(tmp_path, monkeypatch):
+def test_run_joint_analysis_uses_doubao_triz_and_parallel_challenges_for_knowledge_lookup(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_config_module, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(runtime_config_module, "WORKSPACE_TMP_DIR", tmp_path / "_missing_tmp_dir")
     for key in runtime_config_module.AI_ENV_KEYS:
@@ -328,18 +404,17 @@ def test_run_joint_analysis_uses_deepseek_triz_and_parallel_challenges_for_knowl
         async def post(self, url, json=None, headers=None):
             if "volc.example" in url:
                 prompt = json["messages"][-1]["content"]
-                assert "triz_challenge_review" in prompt
-                assert "DeepSeek TRIZ 方案：建议优先优化加热曲线。" in prompt
-                return FakeResponse({"choices": [{"message": {"content": "豆包质询：需要核对热负荷变化的实测数据。"}}]})
+                assert "triz_solution" in prompt
+                return FakeResponse({"choices": [{"message": {"content": "豆包 TRIZ 方案：建议优先优化加热曲线。"}}]})
             if "deepseek.example" in url:
                 prompt = json["messages"][-1]["content"]
-                assert "draft_answer" in prompt
-                assert "triz_solution" in prompt
-                return FakeResponse({"choices": [{"message": {"content": "DeepSeek TRIZ 方案：建议优先优化加热曲线。"}}]})
+                assert "triz_challenge_review" in prompt
+                assert "豆包 TRIZ 方案：建议优先优化加热曲线。" in prompt
+                return FakeResponse({"choices": [{"message": {"content": "DeepSeek 质询：需要核对热负荷变化的实测数据。"}}]})
             if "zhipu.example" in url:
                 prompt = json["messages"][-1]["content"]
                 assert "triz_challenge_review" in prompt
-                assert "DeepSeek TRIZ 方案：建议优先优化加热曲线。" in prompt
+                assert "豆包 TRIZ 方案：建议优先优化加热曲线。" in prompt
                 return FakeResponse({"choices": [{"message": {"content": "智谱清言质询：建议先完成热负荷实测。"}}]})
             raise AssertionError(f"Unexpected URL: {url}")
 
@@ -359,15 +434,15 @@ def test_run_joint_analysis_uses_deepseek_triz_and_parallel_challenges_for_knowl
         )
     )
 
-    assert result["provider"] == "DeepSeek"
-    assert result["answer"] == "DeepSeek TRIZ 方案：建议优先优化加热曲线。"
-    assert result["fallback_reason"] == "knowledge_lookup_deepseek_triz_parallel_challenges_complete"
+    assert result["provider"] == "火山大模型"
+    assert result["answer"] == "豆包 TRIZ 方案：建议优先优化加热曲线。"
+    assert result["fallback_reason"] == "knowledge_lookup_doubao_triz_parallel_challenges_complete"
     assert result["diagnostics"]["analysis_type"] == "knowledge_lookup"
     assert result["diagnostics"]["workflow_provider_order"] == ["智谱清言", "DeepSeek", "火山大模型"]
     assert len(result["responses"]) == 4
-    assert [response["provider"] for response in result["responses"]] == ["资料库检索", "DeepSeek", "火山大模型", "智谱清言"]
-    assert [response["workflow_role"] for response in result["responses"]] == ["knowledge_base_answer", "deepseek_triz_analyst", "doubao_challenger", "zhipu_challenger"]
-    assert result["responses"][2]["raw"] == {"choices": [{"message": {"content": "豆包质询：需要核对热负荷变化的实测数据。"}}]}
+    assert [response["provider"] for response in result["responses"]] == ["资料库检索", "火山大模型", "DeepSeek", "智谱清言"]
+    assert [response["workflow_role"] for response in result["responses"]] == ["knowledge_base_answer", "doubao_triz_analyst", "deepseek_challenger", "zhipu_challenger"]
+    assert result["responses"][2]["raw"] == {"choices": [{"message": {"content": "DeepSeek 质询：需要核对热负荷变化的实测数据。"}}]}
 
 
 def test_triz_analysis_prompt_keeps_analysis_mode_and_missing_data_instruction():
@@ -394,7 +469,7 @@ def test_zhipu_triz_challenge_uses_review_timeout_without_retries():
     assert ai_client_module._provider_max_retries(provider, prompt) == 0
 
 
-def test_knowledge_lookup_returns_local_answer_when_deepseek_triz_call_fails(tmp_path, monkeypatch):
+def test_knowledge_lookup_returns_local_answer_when_doubao_triz_call_is_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_config_module, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(runtime_config_module, "WORKSPACE_TMP_DIR", tmp_path / "_missing_tmp_dir")
     for key in runtime_config_module.AI_ENV_KEYS:
@@ -415,11 +490,11 @@ def test_knowledge_lookup_returns_local_answer_when_deepseek_triz_call_fails(tmp
     )
 
     assert result["provider"] == "资料库检索"
-    assert result["fallback_reason"] == "knowledge_lookup_deepseek_triz_failed"
-    assert result["responses"][-1]["workflow_role"] == "deepseek_triz_analyst"
+    assert result["fallback_reason"] == "knowledge_lookup_doubao_triz_missing"
+    assert result["responses"][-1]["workflow_role"] == "knowledge_base_answer"
 
 
-def test_knowledge_lookup_keeps_deepseek_solution_when_parallel_challenges_fail(tmp_path, monkeypatch):
+def test_knowledge_lookup_keeps_doubao_solution_when_parallel_challenges_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_config_module, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(runtime_config_module, "WORKSPACE_TMP_DIR", tmp_path / "_missing_tmp_dir")
     for key in runtime_config_module.AI_ENV_KEYS:
@@ -438,10 +513,8 @@ def test_knowledge_lookup_keeps_deepseek_solution_when_parallel_challenges_fail(
     monkeypatch.setenv("CLAUDE_API_TYPE", "openai")
 
     async def controlled_call(client, provider, prompt):
-        if provider["name"] == "火山大模型":
-            return {"provider": "火山大模型", "summary": "调用失败", "errors": ["调用失败"]}
-        if provider["name"] == "DeepSeek" and "triz_solution" in prompt:
-            return {"provider": "DeepSeek", "model": "deepseek-chat", "answer": "DeepSeek TRIZ 方案", "summary": "DeepSeek TRIZ 方案"}
+        if provider["name"] == "火山大模型" and "triz_solution" in prompt:
+            return {"provider": "火山大模型", "model": "doubao", "answer": "豆包 TRIZ 方案", "summary": "豆包 TRIZ 方案"}
         return {"provider": provider["name"], "summary": "调用失败", "errors": ["调用失败"]}
 
     monkeypatch.setattr(ai_client_module, "_call_model_provider", controlled_call)
@@ -452,10 +525,10 @@ def test_knowledge_lookup_keeps_deepseek_solution_when_parallel_challenges_fail(
         )
     )
 
-    assert result["provider"] == "DeepSeek"
-    assert result["answer"] == "DeepSeek TRIZ 方案"
-    assert result["fallback_reason"] == "knowledge_lookup_deepseek_triz_parallel_challenges_complete"
-    assert [response["workflow_role"] for response in result["responses"]] == ["knowledge_base_answer", "deepseek_triz_analyst", "doubao_challenger", "zhipu_challenger"]
+    assert result["provider"] == "火山大模型"
+    assert result["answer"] == "豆包 TRIZ 方案"
+    assert result["fallback_reason"] == "knowledge_lookup_doubao_triz_parallel_challenges_complete"
+    assert [response["workflow_role"] for response in result["responses"]] == ["knowledge_base_answer", "doubao_triz_analyst", "deepseek_challenger", "zhipu_challenger"]
 
 
 def test_artifact_answer_does_not_confuse_bujinliang_with_gudingliang_doc_number():

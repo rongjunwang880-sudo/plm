@@ -12,9 +12,10 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 from xml.etree import ElementTree
+from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openpyxl import load_workbook
 from PIL import Image, UnidentifiedImageError
@@ -31,6 +32,7 @@ from app.industrial_furnace_knowledge import weighted_query_terms, weighted_term
 from app.lightrag_retrieval import search_with_lightrag
 from app.schemas import (
     ApprovalActionRequest,
+    AiAnalysisNextRoundRequest,
     AiAnalysisRequest,
     ArtifactBatchCreate,
     ArtifactCreate,
@@ -58,6 +60,88 @@ logger = logging.getLogger(__name__)
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _docx_paragraph(text: str, bold: bool = False, style: str = "body") -> str:
+    content = xml_escape(str(text or "")) or " "
+    colors = {"title": "17365D", "heading": "1F4E78", "label": "0F766E", "body": "243447", "muted": "64748B"}
+    sizes = {"title": "36", "heading": "26", "label": "20", "body": "21", "muted": "18"}
+    run_properties = f'<w:rPr><w:color w:val="{colors[style]}"/><w:sz w:val="{sizes[style]}"/>{"<w:b/>" if bold else ""}</w:rPr>'
+    return f'<w:p><w:pPr><w:spacing w:after="120" w:line="300" w:lineRule="auto"/></w:pPr><w:r>{run_properties}<w:t xml:space="preserve">{content}</w:t></w:r></w:p>'
+
+
+def _docx_banner(title: str, value: str) -> str:
+    return (
+        '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tr><w:tc>'
+        '<w:tcPr><w:shd w:fill="EAF2F8"/><w:tcMar><w:top w:w="160" w:type="dxa"/>'
+        '<w:bottom w:w="160" w:type="dxa"/><w:left w:w="180" w:type="dxa"/><w:right w:w="180" w:type="dxa"/>'
+        '</w:tcMar></w:tcPr>'
+        f'{_docx_paragraph(title, bold=True, style="label")}{_docx_paragraph(value, style="body")}'
+        '</w:tc></w:tr></w:tbl>'
+    )
+
+
+def _round_payload(round_row: models.AiAnalysisRound) -> dict:
+    return {
+        "id": round_row.id,
+        "round_no": round_row.round_no,
+        "human_feedback": round_row.human_feedback,
+        "provider": round_row.provider,
+        "status": round_row.status,
+        "created_at": round_row.created_at.isoformat(),
+        "result": json.loads(round_row.response_json),
+    }
+
+
+def _build_ai_analysis_docx(analysis: models.AiAnalysis, round_row: models.AiAnalysisRound | None = None) -> bytes:
+    request = json.loads(analysis.request_json)
+    result = json.loads(round_row.response_json) if round_row else json.loads(analysis.response_json)
+    round_no = round_row.round_no if round_row else 1
+    paragraphs = [
+        _docx_paragraph("工业炉 AI TRIZ 迭代评审报告", bold=True, style="title"),
+        _docx_paragraph(f"第 {round_no} 轮 / 版本 V{round_no}.0", bold=True, style="label"),
+        _docx_paragraph(f"生成时间：{analysis.created_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · 分析编号：{analysis.id}", style="muted"),
+        _docx_banner("分析问题", request.get("original_question") or request.get("question") or "未提供问题"),
+        _docx_paragraph("本轮模型结论", bold=True, style="heading"),
+    ]
+    role_titles = {
+        "knowledge_base_answer": "资料库检索初判",
+        "doubao_triz_analyst": "豆包 TRIZ 方案",
+        "deepseek_challenger": "DeepSeek 质询",
+        "zhipu_challenger": "智谱清言质询",
+    }
+    for response in result.get("responses") or []:
+        title = role_titles.get(response.get("workflow_role")) or response.get("provider") or "模型结果"
+        paragraphs.append(_docx_paragraph(title, bold=True, style="heading"))
+        paragraphs.append(_docx_paragraph(response.get("answer") or response.get("summary") or "未返回内容"))
+    if round_row and round_row.human_feedback:
+        paragraphs.extend([_docx_paragraph("本轮吸收的人工意见", bold=True, style="heading"), _docx_banner("人工意见", round_row.human_feedback)])
+
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f'<w:body>{"".join(paragraphs)}<w:sectPr><w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080"/></w:sectPr></w:body></w:document>'
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '</Types>'
+    )
+    relationships = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        '</Relationships>'
+    )
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", relationships)
+        archive.writestr("word/document.xml", document_xml)
+    return output.getvalue()
 
 
 def _build_index_html() -> str:
@@ -1969,9 +2053,26 @@ async def create_ai_analysis(
         status="SUCCESS" if "errors" not in ai_result else "FAILED",
     )
     db.add(analysis)
+    db.flush()
+    db.add(
+        models.AiAnalysisRound(
+            analysis_id=analysis.id,
+            round_no=1,
+            human_feedback=None,
+            response_json=json.dumps(ai_result, ensure_ascii=False),
+            provider=analysis.provider,
+            status=analysis.status,
+        )
+    )
     db.commit()
     db.refresh(analysis)
-    return {"id": analysis.id, "provider": analysis.provider, "status": analysis.status, "result": ai_result}
+    return {
+        "id": analysis.id,
+        "provider": analysis.provider,
+        "status": analysis.status,
+        "result": ai_result,
+        "rounds": [_round_payload(db.query(models.AiAnalysisRound).filter_by(analysis_id=analysis.id, round_no=1).one())],
+    }
 
 
 @app.get("/api/projects/{project_id}/ai-analyses")
@@ -1986,6 +2087,109 @@ def list_ai_analyses(project_id: int, db: Session = Depends(get_db), current_use
             "provider": analysis.provider,
             "status": analysis.status,
             "result": json.loads(analysis.response_json),
+            "rounds": [_round_payload(row) for row in db.query(models.AiAnalysisRound).filter_by(analysis_id=analysis.id).order_by(models.AiAnalysisRound.round_no).all()],
         }
         for analysis in analyses
     ]
+
+
+@app.post("/api/projects/{project_id}/ai-analyses/{analysis_id}/rounds")
+async def create_ai_analysis_next_round(
+    project_id: int,
+    analysis_id: int,
+    payload: AiAnalysisNextRoundRequest,
+    db: Session = Depends(get_db),
+    role: str = Depends(permission_dependency("ai:analyze")),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    require_project_access(db, project_id, current_user)
+    analysis = db.get(models.AiAnalysis, analysis_id)
+    if analysis is None or analysis.project_id != project_id:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "AI 分析记录不存在"})
+    rounds = db.query(models.AiAnalysisRound).filter_by(analysis_id=analysis.id).order_by(models.AiAnalysisRound.round_no).all()
+    if not rounds:
+        raise HTTPException(status_code=409, detail={"code": "ROUND_STATE_INVALID", "message": "分析记录缺少首轮结果"})
+    if len(rounds) >= 5:
+        raise HTTPException(status_code=400, detail={"code": "ROUND_LIMIT_REACHED", "message": "该分析已完成五轮评审"})
+
+    request_data = json.loads(analysis.request_json)
+    previous = _round_payload(rounds[-1])
+    feedback_artifacts = []
+    for artifact_id in payload.artifact_ids:
+        artifact = db.get(models.ProjectArtifact, artifact_id)
+        if artifact is None or artifact.project_id != project_id or artifact.status != "ACTIVE":
+            continue
+        feedback_artifacts.append(
+            {
+                "artifact_id": artifact.id,
+                "type": artifact.artifact_type,
+                "type_name": ARTIFACT_TYPES.get(artifact.artifact_type, artifact.artifact_type),
+                "title": artifact.title,
+                "content": artifact.content,
+            }
+        )
+    request_data["previous_round"] = {
+        "round_no": previous["round_no"],
+        "human_feedback": payload.human_feedback.strip(),
+        "human_feedback_attachments": feedback_artifacts,
+        "solution_and_challenges": previous["result"].get("responses") or [],
+    }
+    request_data["analysis_round"] = len(rounds) + 1
+    ai_result = await run_joint_analysis(json.dumps(request_data, ensure_ascii=False, indent=2))
+    round_row = models.AiAnalysisRound(
+        analysis_id=analysis.id,
+        round_no=len(rounds) + 1,
+        human_feedback=payload.human_feedback.strip(),
+        response_json=json.dumps(ai_result, ensure_ascii=False),
+        provider=ai_result.get("provider", "unknown"),
+        status="SUCCESS" if "errors" not in ai_result else "FAILED",
+    )
+    db.add(round_row)
+    db.commit()
+    db.refresh(round_row)
+    return {"id": analysis.id, "round": _round_payload(round_row)}
+
+
+@app.get("/api/projects/{project_id}/ai-analyses/{analysis_id}/download-docx")
+def download_ai_analysis_docx(
+    project_id: int,
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    role: str = Depends(permission_dependency("ai:analyze")),
+    current_user: dict = Depends(get_current_user),
+) -> Response:
+    require_project_access(db, project_id, current_user)
+    analysis = db.get(models.AiAnalysis, analysis_id)
+    if analysis is None or analysis.project_id != project_id:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "AI 分析记录不存在"})
+    round_row = db.query(models.AiAnalysisRound).filter_by(analysis_id=analysis.id, round_no=1).one_or_none()
+    filename = f"ai-triz-analysis-{analysis.id}-v1.docx"
+    return Response(
+        content=_build_ai_analysis_docx(analysis, round_row),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/projects/{project_id}/ai-analyses/{analysis_id}/rounds/{round_no}/download-docx")
+def download_ai_analysis_round_docx(
+    project_id: int,
+    analysis_id: int,
+    round_no: int,
+    db: Session = Depends(get_db),
+    role: str = Depends(permission_dependency("ai:analyze")),
+    current_user: dict = Depends(get_current_user),
+) -> Response:
+    require_project_access(db, project_id, current_user)
+    analysis = db.get(models.AiAnalysis, analysis_id)
+    if analysis is None or analysis.project_id != project_id:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "AI 分析记录不存在"})
+    round_row = db.query(models.AiAnalysisRound).filter_by(analysis_id=analysis.id, round_no=round_no).one_or_none()
+    if round_row is None:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "AI 分析轮次不存在"})
+    filename = f"ai-triz-analysis-{analysis.id}-v{round_no}.docx"
+    return Response(
+        content=_build_ai_analysis_docx(analysis, round_row),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

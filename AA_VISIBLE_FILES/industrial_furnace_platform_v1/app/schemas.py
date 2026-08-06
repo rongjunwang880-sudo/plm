@@ -172,3 +172,8 @@ class AiAnalysisRequest(BaseModel):
     artifact_ids: list[int] = Field(default_factory=list)
     question: str = "请根据项目资料回答我的问题。"
     pasted_images: list[ClipboardImageInput] = Field(default_factory=list)
+
+
+class AiAnalysisNextRoundRequest(BaseModel):
+    human_feedback: str = Field(min_length=1, max_length=12000)
+    artifact_ids: list[int] = Field(default_factory=list)
