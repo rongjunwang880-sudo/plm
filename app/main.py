@@ -42,11 +42,14 @@ from app.models import (
     ProjectFeedback,
     ProjectItem,
     ProjectParam,
+    TrizAnalysisRound,
 )
 from app.schemas import (
     AiAnalysisCreate,
     AiAnalysisRequestOut,
     AiAnalysisResultOut,
+    TrizAnalysisRoundOut,
+    TrizRoundDecision,
     ApprovalAction,
     ApprovalCreate,
     ApprovalLogOut,
@@ -1894,14 +1897,16 @@ def analysis_page() -> str:
 
       async function renderAiPanelFromRequests(requests) {
         const panel = document.getElementById('ai-panel');
+        const startControl = currentProjectId ? `<div class="toolbar"><button class="btn btn-primary" onclick="startTriz10Workflow()">创建十轮 TRIZ 分析</button></div>` : '';
         if (!requests.length) {
-          panel.innerHTML = '<div class="empty">当前项目还没有 AI 分析请求</div>';
+          panel.innerHTML = `${startControl}<div class="empty">当前项目还没有 AI 分析请求</div>`;
           return;
         }
         const sections = [];
         for (const request of requests) {
           const result = await fetchJson(`/ai/analysis/${request.id}/result`);
           const framework = result?.raw_response_json?.analysis_framework;
+          const trizRounds = request.analysis_type === 'triz10' ? await fetchJson(`/ai/analysis/${request.id}/triz-rounds`) : [];
           sections.push(`
             <div class="item">
               <strong>${escapeHtml(request.analysis_type)}</strong>
@@ -1911,10 +1916,57 @@ def analysis_page() -> str:
                 <a class="btn btn-secondary" href="/ai/analysis/${request.id}/result" target="_blank">查看结果 JSON</a>
               </div>
               ${renderThreeFlowFramework(framework)}
+              ${renderTrizRounds(request.id, trizRounds)}
             </div>
           `);
         }
-        panel.innerHTML = sections.join('');
+        panel.innerHTML = `${startControl}${sections.join('')}`;
+      }
+
+      function renderTrizRounds(requestId, rounds) {
+        if (!rounds.length) return '';
+        const current = rounds[rounds.length - 1];
+        return `<div class="flow-grid"><strong>十轮 TRIZ 分析</strong>${rounds.map((round) => `
+          <div class="flow-card">
+            <div><strong>第 ${round.round_no} 轮：${escapeHtml(round.stage_name)}</strong> <span class="pill warn">${escapeHtml(round.satisfaction)}</span></div>
+            <div class="muted">职责：${escapeHtml(round.stage_scope)}</div>
+            <div class="muted">技术总结：${escapeHtml(round.technical_summary)}</div>
+            ${round.proposal_text ? `<div class="muted">方案：${escapeHtml(round.proposal_text)}</div>` : ''}
+            ${round.human_feedback ? `<div class="muted">反馈：${escapeHtml(round.human_feedback)}</div>` : ''}
+          </div>`).join('')}
+          ${current.round_no < 10 ? `<div class="toolbar"><button class="btn btn-secondary" onclick="advanceTriz10Workflow(${requestId}, 'continue')">继续分析</button><button class="btn btn-primary" onclick="advanceTriz10Workflow(${requestId}, 'satisfied')">满意并执行</button><button class="btn btn-secondary" onclick="advanceTriz10Workflow(${requestId}, 'reanalyze')">重新分析</button></div>` : ''}
+        </div>`;
+      }
+
+      async function startTriz10Workflow() {
+        if (!currentProjectId) return;
+        await fetchJson('/ai/analysis', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({project_id: currentProjectId, analysis_type: 'triz10', requested_by: 'workbench'})
+        });
+        await loadProjectWorkspace(currentProjectId);
+      }
+
+      async function advanceTriz10Workflow(requestId, satisfaction) {
+        const humanFeedback = window.prompt('填写本轮反馈，可留空：') || null;
+        if (satisfaction === 'satisfied') {
+          const rounds = await fetchJson(`/ai/analysis/${requestId}/triz-rounds`);
+          const current = rounds[rounds.length - 1];
+          await fetchJson(`/ai/analysis/${requestId}/triz-rounds/${current.round_no}/decision`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({satisfaction, human_feedback: humanFeedback})
+          });
+          await loadProjectWorkspace(currentProjectId);
+          return;
+        }
+        await fetchJson(`/ai/analysis/${requestId}/triz-rounds/next`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({satisfaction, human_feedback: humanFeedback})
+        });
+        await loadProjectWorkspace(currentProjectId);
       }
 
       async function loadDashboard() {
@@ -2010,6 +2062,62 @@ def get_ai_request_or_404(db: Session, request_id: int) -> AiAnalysisRequest:
     if not request:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI analysis request not found")
     return request
+
+
+TRIZ10_STAGE_DEFINITIONS = {
+    1: (
+        "资料检索、查险与简单 TRIZ",
+        "检索本地知识库、同类专利、专利评价和相关报道；完成查险、简单 TRIZ 分析与执行建议。",
+        "本轮已建立本地知识库与同类公开资料检索范围。当前项目计算结果和现场反馈作为本地证据；专利、评价和报道在接入检索来源后补充为可引用条目。",
+    ),
+    2: ("功能分析", "详细识别对象、组件、作用与有害作用，形成函数模型。", "本轮聚焦功能分析，输出对象功能链、关键有害作用和待验证功能关系。"),
+    3: ("因果分析", "分析问题的直接原因、根本原因和可控原因，逐步形成方案。", "本轮聚焦因果链，区分证据、假设与待验证原因，并形成初步干预方向。"),
+    4: ("方案与远期分析", "使用理想解、小人解、聪明小人法、九屏幕法、物场分析和 76 个标准解形成方案。", "本轮比较理想解、小人解、聪明小人法、九屏幕法、物场分析和 76 个标准解，输出候选方案与远期分析。"),
+    5: ("矛盾分析", "分析物理矛盾、技术矛盾和方案边界，逐步形成可执行方案。", "本轮识别物理矛盾与技术矛盾，明确冲突参数、边界条件和方案取舍。"),
+    6: ("方案复核", "复核已有方案的证据、风险、约束和验证动作。", "本轮复核已有方案的证据完整性、风险和首个验证动作。"),
+    7: ("方案修订", "依据反馈修订方案，形成下一版技术结论。", "本轮依据人工反馈和前序结论修订方案，记录变更理由。"),
+    8: ("实施条件分析", "分析资源、工艺、现场条件和实施前提。", "本轮梳理实施条件、资源需求、工艺约束和待确认事项。"),
+    9: ("验证与优化", "核验方案结果并优化风险控制措施。", "本轮汇总验证结果，优化风险控制措施和执行顺序。"),
+    10: ("最终技术总结", "输出最终技术总结、满意度结论和执行跟踪事项。", "本轮汇总十轮技术结论，形成最终执行方案、待确认项和跟踪事项。"),
+}
+
+
+def get_triz10_request_or_404(db: Session, request_id: int) -> AiAnalysisRequest:
+    request = get_ai_request_or_404(db, request_id)
+    if request.analysis_type != "triz10":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="AI analysis is not a triz10 workflow")
+    return request
+
+
+def create_triz_round(db: Session, request: AiAnalysisRequest, round_no: int, human_feedback: str | None = None) -> TrizAnalysisRound:
+    stage_name, stage_scope, summary = TRIZ10_STAGE_DEFINITIONS[round_no]
+    prior_rounds = db.scalars(
+        select(TrizAnalysisRound)
+        .where(TrizAnalysisRound.request_id == request.id)
+        .order_by(TrizAnalysisRound.round_no.asc())
+    ).all()
+    context = {
+        "request_input": request.input_payload_json or {},
+        "prior_rounds": [
+            {"round_no": row.round_no, "stage_name": row.stage_name, "satisfaction": row.satisfaction}
+            for row in prior_rounds
+        ],
+        "human_feedback": human_feedback,
+    }
+    proposal_text = None
+    if round_no >= 3:
+        proposal_text = "基于当前轮次分析形成候选方案；方案中的工程参数、成本和安全边界标记为[待确认]，需结合项目资料与现场验证后执行。"
+    if round_no == 1:
+        proposal_text = "先完成本地资料核对与风险清单，再确定简单 TRIZ 的首个验证动作。"
+    return TrizAnalysisRound(
+        request_id=request.id,
+        round_no=round_no,
+        stage_name=stage_name,
+        stage_scope=stage_scope,
+        context_json=context,
+        technical_summary=summary,
+        proposal_text=proposal_text,
+    )
 
 
 def validate_calc_step_ref(db: Session, node_type: str, calc_step_id: int | None) -> None:
@@ -3069,6 +3177,8 @@ def create_ai_analysis(payload: AiAnalysisCreate, db: Session = Depends(get_db))
         raw_response_json=raw_response_json,
     )
     db.add(result)
+    if payload.analysis_type == "triz10":
+        db.add(create_triz_round(db, request, 1))
     db.commit()
     db.refresh(request)
     return request
@@ -3085,6 +3195,69 @@ def get_ai_analysis_result(request_id: int, db: Session = Depends(get_db)) -> Ai
     if not request.result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI analysis result not found")
     return request.result
+
+
+@app.get("/ai/analysis/{request_id}/triz-rounds", response_model=list[TrizAnalysisRoundOut])
+def list_triz_rounds(request_id: int, db: Session = Depends(get_db)) -> list[TrizAnalysisRound]:
+    get_triz10_request_or_404(db, request_id)
+    return db.scalars(
+        select(TrizAnalysisRound)
+        .where(TrizAnalysisRound.request_id == request_id)
+        .order_by(TrizAnalysisRound.round_no.asc())
+    ).all()
+
+
+@app.post("/ai/analysis/{request_id}/triz-rounds/{round_no}/decision", response_model=TrizAnalysisRoundOut)
+def decide_triz_round(
+    request_id: int,
+    round_no: int,
+    payload: TrizRoundDecision,
+    db: Session = Depends(get_db),
+) -> TrizAnalysisRound:
+    get_triz10_request_or_404(db, request_id)
+    round_row = db.scalars(
+        select(TrizAnalysisRound).where(
+            TrizAnalysisRound.request_id == request_id,
+            TrizAnalysisRound.round_no == round_no,
+        )
+    ).first()
+    if not round_row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TRIZ round not found")
+    round_row.satisfaction = payload.satisfaction
+    round_row.human_feedback = payload.human_feedback
+    round_row.status = "ready_for_execution" if payload.satisfaction == "satisfied" else "completed"
+    db.commit()
+    db.refresh(round_row)
+    return round_row
+
+
+@app.post("/ai/analysis/{request_id}/triz-rounds/next", response_model=TrizAnalysisRoundOut, status_code=status.HTTP_201_CREATED)
+def create_next_triz_round(
+    request_id: int,
+    payload: TrizRoundDecision,
+    db: Session = Depends(get_db),
+) -> TrizAnalysisRound:
+    request = get_triz10_request_or_404(db, request_id)
+    if payload.satisfaction == "satisfied":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Satisfactory round is ready for execution")
+    rounds = db.scalars(
+        select(TrizAnalysisRound)
+        .where(TrizAnalysisRound.request_id == request_id)
+        .order_by(TrizAnalysisRound.round_no.asc())
+    ).all()
+    if not rounds:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="TRIZ workflow has no first round")
+    current_round = rounds[-1]
+    if current_round.round_no >= 10:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="TRIZ workflow has reached round 10")
+    current_round.satisfaction = payload.satisfaction
+    current_round.human_feedback = payload.human_feedback
+    current_round.status = "ready_for_execution" if payload.satisfaction == "satisfied" else "completed"
+    next_round = create_triz_round(db, request, current_round.round_no + 1, payload.human_feedback)
+    db.add(next_round)
+    db.commit()
+    db.refresh(next_round)
+    return next_round
 
 
 @app.get("/ai/analysis", response_model=list[AiAnalysisRequestOut])

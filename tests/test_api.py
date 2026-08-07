@@ -475,6 +475,71 @@ def test_project_workspace_aggregates_calc_and_feedback_context() -> None:
     assert payload["ai_requests"][0]["analysis_type"] == "workspace-summary"
 
 
+def test_triz10_workflow_persists_staged_rounds_and_decisions() -> None:
+    project_resp = client.post(
+        "/projects",
+        json={"name": f"TRIZ10项目-{uuid.uuid4()}", "owner_user_id": "triz-user", "status": "draft"},
+    )
+    assert project_resp.status_code == 201
+    project_id = project_resp.json()["id"]
+
+    analysis_resp = client.post(
+        "/ai/analysis",
+        json={"project_id": project_id, "analysis_type": "triz10", "requested_by": "triz-user"},
+    )
+    assert analysis_resp.status_code == 201
+    request_id = analysis_resp.json()["id"]
+
+    rounds_resp = client.get(f"/ai/analysis/{request_id}/triz-rounds")
+    assert rounds_resp.status_code == 200
+    first_round = rounds_resp.json()[0]
+    assert first_round["round_no"] == 1
+    assert first_round["stage_name"] == "资料检索、查险与简单 TRIZ"
+    assert "同类专利" in first_round["stage_scope"]
+
+    next_resp = client.post(
+        f"/ai/analysis/{request_id}/triz-rounds/next",
+        json={"satisfaction": "continue", "human_feedback": "请进行功能分析"},
+    )
+    assert next_resp.status_code == 201
+    assert next_resp.json()["round_no"] == 2
+    assert next_resp.json()["stage_name"] == "功能分析"
+
+    decision_resp = client.post(
+        f"/ai/analysis/{request_id}/triz-rounds/2/decision",
+        json={"satisfaction": "satisfied", "human_feedback": "方案进入执行"},
+    )
+    assert decision_resp.status_code == 200
+    assert decision_resp.json()["status"] == "ready_for_execution"
+
+
+def test_triz10_workflow_limits_rounds_to_ten() -> None:
+    project_resp = client.post(
+        "/projects",
+        json={"name": f"TRIZ10上限-{uuid.uuid4()}", "owner_user_id": "triz-user", "status": "draft"},
+    )
+    request_id = client.post(
+        "/ai/analysis",
+        json={"project_id": project_resp.json()["id"], "analysis_type": "triz10"},
+    ).json()["id"]
+
+    for _ in range(9):
+        next_resp = client.post(
+            f"/ai/analysis/{request_id}/triz-rounds/next",
+            json={"satisfaction": "continue"},
+        )
+        assert next_resp.status_code == 201
+
+    rounds = client.get(f"/ai/analysis/{request_id}/triz-rounds").json()
+    assert len(rounds) == 10
+    assert rounds[-1]["stage_name"] == "最终技术总结"
+    limited_resp = client.post(
+        f"/ai/analysis/{request_id}/triz-rounds/next",
+        json={"satisfaction": "continue"},
+    )
+    assert limited_resp.status_code == 409
+
+
 def test_project_feedback_supports_item_and_node_binding() -> None:
     project_resp = client.post(
         "/projects",

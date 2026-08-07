@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -254,6 +254,9 @@ class AiAnalysisRequest(TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     result: Mapped[AiAnalysisResult | None] = relationship(back_populates="request", cascade="all, delete-orphan")
+    triz_rounds: Mapped[list["TrizAnalysisRound"]] = relationship(
+        back_populates="request", cascade="all, delete-orphan"
+    )
 
 
 class AiAnalysisResult(TimestampMixin, Base):
@@ -268,3 +271,22 @@ class AiAnalysisResult(TimestampMixin, Base):
     raw_response_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     request: Mapped[AiAnalysisRequest] = relationship(back_populates="result")
+
+
+class TrizAnalysisRound(TimestampMixin, Base):
+    __tablename__ = "triz_analysis_rounds"
+    __table_args__ = (UniqueConstraint("request_id", "round_no", name="uq_triz_round_request_no"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("ai_analysis_requests.id"), index=True)
+    round_no: Mapped[int] = mapped_column(Integer)
+    stage_name: Mapped[str] = mapped_column(String(100))
+    stage_scope: Mapped[str] = mapped_column(Text)
+    context_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    technical_summary: Mapped[str] = mapped_column(Text)
+    proposal_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    satisfaction: Mapped[str] = mapped_column(String(30), default="pending")
+    human_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="completed")
+
+    request: Mapped[AiAnalysisRequest] = relationship(back_populates="triz_rounds")

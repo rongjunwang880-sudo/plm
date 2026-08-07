@@ -393,3 +393,26 @@ class AiAnalysisRequestOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class TrizRoundDecision(BaseModel):
+    satisfaction: str = Field(pattern="^(continue|satisfied|reanalyze)$")
+    human_feedback: str | None = Field(default=None, max_length=4000)
+
+
+class TrizAnalysisRoundOut(BaseModel):
+    id: int
+    request_id: int
+    round_no: int
+    stage_name: str
+    stage_scope: str
+    context_json: dict | None
+    technical_summary: str
+    proposal_text: str | None
+    satisfaction: str
+    human_feedback: str | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
