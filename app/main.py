@@ -1961,10 +1961,15 @@ def analysis_page() -> str:
           await loadProjectWorkspace(currentProjectId);
           return;
         }
+        let restartFromRound = null;
+        if (satisfaction === 'reanalyze') {
+          const value = window.prompt('填写回退起点轮次，例如 2：');
+          restartFromRound = value ? Number(value) : null;
+        }
         await fetchJson(`/ai/analysis/${requestId}/triz-rounds/next`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({satisfaction, human_feedback: humanFeedback})
+          body: JSON.stringify({satisfaction, human_feedback: humanFeedback, restart_from_round: restartFromRound})
         });
         await loadProjectWorkspace(currentProjectId);
       }
@@ -2089,7 +2094,13 @@ def get_triz10_request_or_404(db: Session, request_id: int) -> AiAnalysisRequest
     return request
 
 
-def create_triz_round(db: Session, request: AiAnalysisRequest, round_no: int, human_feedback: str | None = None) -> TrizAnalysisRound:
+def create_triz_round(
+    db: Session,
+    request: AiAnalysisRequest,
+    round_no: int,
+    human_feedback: str | None = None,
+    restart_from_round: int | None = None,
+) -> TrizAnalysisRound:
     stage_name, stage_scope, summary = TRIZ10_STAGE_DEFINITIONS[round_no]
     prior_rounds = db.scalars(
         select(TrizAnalysisRound)
@@ -2103,12 +2114,15 @@ def create_triz_round(db: Session, request: AiAnalysisRequest, round_no: int, hu
             for row in prior_rounds
         ],
         "human_feedback": human_feedback,
+        "restart_from_round": restart_from_round,
     }
     proposal_text = None
     if round_no >= 3:
         proposal_text = "基于当前轮次分析形成候选方案；方案中的工程参数、成本和安全边界标记为[待确认]，需结合项目资料与现场验证后执行。"
     if round_no == 1:
         proposal_text = "先完成本地资料核对与风险清单，再确定简单 TRIZ 的首个验证动作。"
+    if restart_from_round is not None:
+        summary = f"本轮从第 {restart_from_round} 轮分析结论回退重新分析。{summary}"
     return TrizAnalysisRound(
         request_id=request.id,
         round_no=round_no,
@@ -3250,10 +3264,18 @@ def create_next_triz_round(
     current_round = rounds[-1]
     if current_round.round_no >= 10:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="TRIZ workflow has reached round 10")
+    if payload.restart_from_round is not None and payload.restart_from_round > current_round.round_no:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Restart round must be an existing round")
     current_round.satisfaction = payload.satisfaction
     current_round.human_feedback = payload.human_feedback
     current_round.status = "ready_for_execution" if payload.satisfaction == "satisfied" else "completed"
-    next_round = create_triz_round(db, request, current_round.round_no + 1, payload.human_feedback)
+    next_round = create_triz_round(
+        db,
+        request,
+        current_round.round_no + 1,
+        payload.human_feedback,
+        payload.restart_from_round if payload.satisfaction == "reanalyze" else None,
+    )
     db.add(next_round)
     db.commit()
     db.refresh(next_round)

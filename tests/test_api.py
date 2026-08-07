@@ -505,8 +505,17 @@ def test_triz10_workflow_persists_staged_rounds_and_decisions() -> None:
     assert next_resp.json()["round_no"] == 2
     assert next_resp.json()["stage_name"] == "功能分析"
 
+    reanalyze_resp = client.post(
+        f"/ai/analysis/{request_id}/triz-rounds/next",
+        json={"satisfaction": "reanalyze", "restart_from_round": 1, "human_feedback": "回到资料检索结论复核"},
+    )
+    assert reanalyze_resp.status_code == 201
+    assert reanalyze_resp.json()["round_no"] == 3
+    assert reanalyze_resp.json()["context_json"]["restart_from_round"] == 1
+    assert "回退重新分析" in reanalyze_resp.json()["technical_summary"]
+
     decision_resp = client.post(
-        f"/ai/analysis/{request_id}/triz-rounds/2/decision",
+        f"/ai/analysis/{request_id}/triz-rounds/3/decision",
         json={"satisfaction": "satisfied", "human_feedback": "方案进入执行"},
     )
     assert decision_resp.status_code == 200

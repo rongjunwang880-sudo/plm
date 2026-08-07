@@ -398,6 +398,7 @@ class AiAnalysisRequestOut(BaseModel):
 class TrizRoundDecision(BaseModel):
     satisfaction: str = Field(pattern="^(continue|satisfied|reanalyze)$")
     human_feedback: str | None = Field(default=None, max_length=4000)
+    restart_from_round: int | None = Field(default=None, ge=1, le=10)
 
 
 class TrizAnalysisRoundOut(BaseModel):
