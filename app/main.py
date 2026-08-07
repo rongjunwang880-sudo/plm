@@ -131,6 +131,7 @@ MENU_ICON_ASSETS = {
 STEP_FURNACE_OFFLINE_ARTIFACT = str(Path(__file__).with_name("walking_beam_level2_offline.py"))
 DEFAULT_DIRECT_RUN_PROJECT_NAME = "步进炉默认测试项目"
 DEFAULT_DIRECT_RUN_ITEM_NAME = "步进炉默认测试名目"
+DEFAULT_TRIZ10_QUESTION = "步进炉的水梁容易出现什么问题？如何避免？"
 DEFAULT_DIRECT_RUN_ITEM_CODE = "STEP-FURNACE-DEFAULT"
 
 
@@ -1897,7 +1898,7 @@ def analysis_page() -> str:
 
       async function renderAiPanelFromRequests(requests) {
         const panel = document.getElementById('ai-panel');
-        const startControl = currentProjectId ? `<div class="toolbar"><button class="btn btn-primary" onclick="startTriz10Workflow()">创建十轮 TRIZ 分析</button></div>` : '';
+        const startControl = currentProjectId ? `<div class="toolbar"><button class="btn btn-primary" onclick="startTriz10Workflow()">创建十轮 TRIZ 分析</button><span class="muted">缺省问题：步进炉的水梁容易出现什么问题？如何避免？</span></div>` : '';
         if (!requests.length) {
           panel.innerHTML = `${startControl}<div class="empty">当前项目还没有 AI 分析请求</div>`;
           return;
@@ -3164,6 +3165,10 @@ def create_ai_analysis(payload: AiAnalysisCreate, db: Session = Depends(get_db))
     get_project_or_404(db, payload.project_id)
     if payload.project_item_id is not None:
         get_project_item_or_404(db, payload.project_id, payload.project_item_id)
+    if payload.analysis_type == "triz10":
+        input_payload = dict(payload.input_payload_json or {})
+        input_payload.setdefault("question", DEFAULT_TRIZ10_QUESTION)
+        payload = payload.model_copy(update={"input_payload_json": input_payload})
     request = AiAnalysisRequest(
         **payload.model_dump(),
         status="success",
