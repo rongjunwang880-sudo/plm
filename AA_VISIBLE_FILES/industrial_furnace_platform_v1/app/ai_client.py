@@ -1120,7 +1120,7 @@ def _provider_request_timeout(provider: dict[str, Any], prompt: str = "") -> flo
         return float(os.getenv("AI_TRIZ_TIMEOUT_SECONDS", "30").strip() or "30")
     if _provider_matches(provider, "智谱", "zhipu", "bigmodel", "glm"):
         if is_review_mode:
-            return float(os.getenv("CLAUDE_REVIEW_TIMEOUT_SECONDS", "45").strip() or "45")
+            return float(os.getenv("CLAUDE_REVIEW_TIMEOUT_SECONDS", "18").strip() or "18")
         if is_knowledge_lookup_mode:
             return float(os.getenv("CLAUDE_KNOWLEDGE_TIMEOUT_SECONDS", "150").strip() or "150")
         return float(os.getenv("CLAUDE_TIMEOUT_SECONDS", "90").strip() or "90")
@@ -1136,7 +1136,7 @@ def _provider_request_timeout(provider: dict[str, Any], prompt: str = "") -> flo
 def _provider_max_retries(provider: dict[str, Any], prompt: str = "") -> int:
     if _provider_matches(provider, "智谱", "zhipu", "bigmodel", "glm"):
         if _prompt_is_review_mode(prompt):
-            return int(os.getenv("CLAUDE_REVIEW_MAX_RETRIES", "1").strip() or "1")
+            return int(os.getenv("CLAUDE_REVIEW_MAX_RETRIES", "0").strip() or "0")
         if _is_knowledge_lookup_mode(prompt):
             return int(os.getenv("CLAUDE_KNOWLEDGE_MAX_RETRIES", "2").strip() or "2")
         return int(os.getenv("CLAUDE_MAX_RETRIES", "1").strip() or "1")
