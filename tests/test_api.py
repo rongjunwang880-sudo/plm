@@ -489,7 +489,7 @@ def test_triz10_workflow_persists_staged_rounds_and_decisions() -> None:
     )
     assert analysis_resp.status_code == 201
     request_id = analysis_resp.json()["id"]
-    assert analysis_resp.json()["input_payload_json"]["question"] == "步进炉的水梁容易出现什么问题？如何避免？"
+    assert analysis_resp.json()["input_payload_json"]["question"] == "水梁焊接需要注意什么问题？如何解决？"
 
     rounds_resp = client.get(f"/ai/analysis/{request_id}/triz-rounds")
     assert rounds_resp.status_code == 200

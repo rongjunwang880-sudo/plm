@@ -131,7 +131,7 @@ MENU_ICON_ASSETS = {
 STEP_FURNACE_OFFLINE_ARTIFACT = str(Path(__file__).with_name("walking_beam_level2_offline.py"))
 DEFAULT_DIRECT_RUN_PROJECT_NAME = "步进炉默认测试项目"
 DEFAULT_DIRECT_RUN_ITEM_NAME = "步进炉默认测试名目"
-DEFAULT_TRIZ10_QUESTION = "步进炉的水梁容易出现什么问题？如何避免？"
+DEFAULT_TRIZ10_QUESTION = "水梁焊接需要注意什么问题？如何解决？"
 DEFAULT_DIRECT_RUN_ITEM_CODE = "STEP-FURNACE-DEFAULT"
 
 
@@ -1898,7 +1898,7 @@ def analysis_page() -> str:
 
       async function renderAiPanelFromRequests(requests) {
         const panel = document.getElementById('ai-panel');
-        const startControl = currentProjectId ? `<div class="toolbar"><button class="btn btn-primary" onclick="startTriz10Workflow()">创建十轮 TRIZ 分析</button><span class="muted">缺省问题：步进炉的水梁容易出现什么问题？如何避免？</span></div>` : '';
+        const startControl = currentProjectId ? `<div class="toolbar"><button class="btn btn-primary" onclick="startTriz10Workflow()">创建十轮 TRIZ 分析</button><span class="muted">缺省问题：水梁焊接需要注意什么问题？如何解决？</span></div>` : '';
         if (!requests.length) {
           panel.innerHTML = `${startControl}<div class="empty">当前项目还没有 AI 分析请求</div>`;
           return;
